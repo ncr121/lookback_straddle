@@ -1,0 +1,107 @@
+import datetime as dt
+import numpy as np
+import pandas as pd
+from collections import defaultdict
+from data_connect.bbg_session import BloombergSession
+
+import trend_straddle_functions as tsf
+
+bbg = BloombergSession()
+
+look_back_rolling_sharpe = 36
+periods_per_year = 12
+annualised = True
+statistics_monthly = pd.DataFrame()
+
+trend_rebal = 0.25
+risk_target = 960000
+scheme_value = 100000000
+
+start_date = dt.datetime.strptime('2012-10-01', '%Y-%m-%d').date()
+end_date = dt.datetime.strptime('2021-11-30', '%Y-%m-%d').date()
+
+db_file = 'Trend_Config.xlsx'
+config_sheet = 'Config LIVE'
+df_config = pd.read_excel(db_file, config_sheet, index_col=0).T
+df_config['START_DATE'].fillna(start_date, inplace=True)
+
+asset_classes = {asset_class + ' ' + asset_type: list(assets.index)
+                 for (asset_class, asset_type), assets in df_config.groupby(['CLASS', 'TYPE'])}
+asset_classes['Trend_New'] = list(df_config[df_config['TREND NEW'] == 1].index)
+# assets == df_config.index, classes == asset_classes.keys(), dict_class == asset_classes
+
+db = {k: defaultdict(dict) for k in [*asset_classes, 'Cross_Asset']}
+
+# Rebalance dates
+all_dates = pd.date_range(start_date, end_date, freq='D')
+rebal_dates = all_dates[all_dates.weekday < 5]
+rebal_dates_monthly = rebal_dates.to_frame().resample('BM').last().index.date
+
+# Price data aCross_Assets
+adj_prices = {ticker: tsf.get_bbg_data(bbg, df_config, ticker, 'PX_LAST', start_date, end_date)
+              for ticker in ('RISK_TICKER', 'NO_ADJ')}  # tickers are the same
+daily_prices = {field: tsf.get_bbg_data(bbg, df_config, 'TREND_PRICE', field, start_date, end_date)
+                for field in ('PX_OPEN', 'PX_LAST', 'PX_HIGH', 'PX_LOW')}
+fx_price = tsf.get_bbg_data(bbg, df_config, 'FX CODE', 'PX_LAST', start_date, end_date)
+
+# Daily and monthly returns
+daily_returns = adj_prices['RISK_TICKER'].pct_change().fillna(0)
+monthly_returns = adj_prices['RISK_TICKER'].reindex(rebal_dates_monthly).pct_change().fillna(0)
+
+# ATR 12 month return signals
+print('Computing Simple Return Signals')
+cont_returns = pd.DataFrame().reindex_like(adj_prices['RISK_TICKER'])
+for asset, returns in adj_prices['RISK_TICKER'].iteritems():
+    cont_returns[asset] = returns.pct_change().rolling(df_config.loc[asset, 'PERIOD']).sum().fillna(0)
+# cont_returns = adj_prices['RISK_TICKER'].pct_change().rolling(window=252).sum().fillna(0)
+periodic_signals = {'Returns': np.sign(cont_returns)}
+
+print('Reading Straddle Signals')
+straddle_file = 'JPM_STRADDLE_FULL_Ganesh_Credit2.xlsx'
+straddle_sheet = 'JPM_STRADDLE'
+excel_signals = pd.read_excel(straddle_file, straddle_sheet, converters={'Dates': lambda x: x.date()}).set_index('Dates')
+# straddle_window = 252
+
+# """
+straddle_signals = {}
+for asset in df_config.index:
+    try:
+        temp = excel_signals[asset]
+        last_date = temp.index[-1]
+    except KeyError:
+        temp = pd.Series()
+        last_date = excel_signals.index[0]
+
+    adj_prices_temp = tsf.get_bbg_data(bbg, df_config.loc[[asset]], 'RISK_TICKER', 'PX_LAST',
+                                       last_date - dt.timedelta(400), dt.date.today() - dt.timedelta(1))
+    risk_free_rates = tsf.get_bbg_historical(bbg, 'US0003M Index', 'PX_LAST', adj_prices_temp.index[0], dt.date.today()).squeeze()
+    temp_straddle = adj_prices_temp.rolling(252).apply(tsf.compute_avg_straddle_delta_final(risk_free_rates))
+    temp_all = pd.concat([temp, temp_straddle.loc[last_date:].iloc[1:]])
+    straddle_signals[asset] = temp_all
+
+df_straddle = pd.DataFrame.from_dict(straddle_signals)
+with pd.ExcelWriter(straddle_file) as writer:
+    df_straddle.to_excel(writer, straddle_sheet, index_label='Dates')
+# """
+
+df_straddle = excel_signals.reindex(excel_signals.index)
+df_straddle[df_straddle > 1] = 1
+df_straddle[df_straddle < -1] = -1
+
+periodic_signals['Straddle'] = df_straddle[start_date:end_date]
+
+# Compute 60 day exponential ATR for each asset
+db['Cross_Asset']['ATR'] = tsf.compute_ATR(daily_prices, df_config)
+db['Cross_Asset']['GBP_ATR'] = db['Cross_Asset']['ATR'] * fx_price * df_config['FUT Multiplier'] * df_config['FX Multiplier']
+
+# Merge straddle & 12m return signals
+db['Cross_Asset']['Composite_Signal'] = periodic_signals['Straddle'].copy()
+db['Cross_Asset']['Composite_Signal'][np.sign(periodic_signals['Returns']) != np.sign(periodic_signals['Straddle'])] = 0
+
+# Compute future contracts
+db['Cross_Asset']['Future_No_Adj'] = np.floor((1 / db['Cross_Asset']['GBP_ATR']) * db['Cross_Asset']['Composite_Signal'] * risk_target)
+db['Cross_Asset']['Future_Monthly_No_Adj'] = db['Cross_Asset']['Future_No_Adj'].reindex(rebal_dates_monthly)
+db['Cross_Asset']['Future_Monthly_Adj'] = tsf.check_changein_signage_risk_thresh(db['Cross_Asset']['Future_Monthly_No_Adj'], db['Cross_Asset']['GBP_ATR'], trend_rebal, risk_target)
+
+# Compute weights allocated as a percentage of fund value: computing back from the # of futures contract to % weight
+db['Cross_Asset']['BPS_Weights_Adj'] = tsf.compute_weights_BPS_scheme(db['Cross_Asset']['Future_Monthly_Adj'], scheme_value, fx_price, adj_prices['NO_ADJ'], df_config)
