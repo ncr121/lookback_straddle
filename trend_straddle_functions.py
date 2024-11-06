@@ -3,8 +3,6 @@ import numpy as np
 import pandas as pd
 import mibian
 
-import utilities_Ganesh as util
-
 
 def get_bbg_historical(bbg, securities, fields, start_date, end_date, periodicity='D'):
     return bbg.get_historical(securities, fields, start_date, end_date, index_type=dt.date, period=periodicity)
