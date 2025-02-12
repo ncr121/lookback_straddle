@@ -8,10 +8,46 @@ from functools import reduce
 
 
 def compute_d1(s, k, r, t, v):
+    """
+    Vectorised implementation of the Black-Scholes model.
+
+    Parameters
+    ----------
+    s : array-like
+        underlying price.
+    k : array-like
+        strike price.
+    r : array-like
+        risk-free interest rate.
+    t : array-like
+        time to expiration.
+    v : array-like
+        volatility.
+
+    Returns
+    -------
+    array-like
+        d1.
+
+    """
     return (np.log(s / k) + np.outer(t, (r + v**2 / 2))) / (np.outer(np.sqrt(t), v))
 
 
 def compute_deltas(d1):
+    """
+    Compute call and put deltas.
+
+    Parameters
+    ----------
+    d1 : array-like
+        DESCRIPTION.
+
+    Returns
+    -------
+    tuple
+        call and put deltas.
+
+    """
     return st.norm.cdf(d1), -st.norm.cdf(-d1)
 
 
@@ -42,6 +78,22 @@ def compute_discrete_straddle(signals, buffer):
 
 
 def elementwise_max(df1, df2):
+    """
+    Compute the elementwise max between two dataframes.
+
+    Parameters
+    ----------
+    df1 : pd.DataFrame
+        first dataframe.
+    df2 : pd.DataFrame
+        second dataframe.
+
+    Returns
+    -------
+    pd.DataFrame
+        elementwise max.
+
+    """
     return pd.DataFrame(np.where(df1 >= df2, df1, df2), df1.index, df1.columns)
 
 
@@ -114,6 +166,20 @@ def compute_returns(returns, weights, comms=0):
 
 
 def compute_drawdown(returns):
+    """
+    Compute the drawdown statistics of a return series.
+
+    Parameters
+    ----------
+    returns : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    dict
+        drawdown series, maximum drawdown, maximum drawdown duration.
+
+    """
     df = returns.rename('Ret').to_frame()
     df['Cum Ret'] = np.cumprod(1 + df['Ret'])
     df['HWM'] = df['Cum Ret'].cummax()
@@ -125,6 +191,26 @@ def compute_drawdown(returns):
 
 
 def performace(returns, weights, comms=0):
+    """
+    Analyse the performace of a strategy at a portfolio level.
+
+    Parameters
+    ----------
+    returns : array-like
+        DESCRIPTION.
+    weights : array-like
+        DESCRIPTION.
+    comms : TYPE, optional
+        DESCRIPTION. The default is 0.
+
+    Returns
+    -------
+    asset_returns : array-like
+        DESCRIPTION.
+    stats : dict
+        mean, std, skew, kurtosis, sharpe and drawdown of portfolio.
+
+    """
     asset_returns, total_returns = compute_returns(returns, weights, comms)
 
     stats = {'mean': total_returns.mean() * 252, 'std': total_returns.std() * np.sqrt(252),
