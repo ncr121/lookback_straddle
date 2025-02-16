@@ -17,3 +17,4 @@ Composite signal using a slower lookback straddle signal (200 day window) and a 
 ## Weights (Positions)
 Similar to an inverse volatility (vol scaling) approach to size positions, an inverse ATR scaling is done to calculate "equal risk" weightings.
 ## Backtesting
+Returns are caluclated based on the positions for each security and across all securities. Statistics such as mean, standard deviation, Sharpe ratio and drawdown are computed.
