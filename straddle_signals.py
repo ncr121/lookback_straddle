@@ -19,7 +19,7 @@ config_sheet = 'Config Final'
 
 bbg_data_file = 'bbg_data.xlsx'
 
-start_date_str = '2015-01-01'
+start_date_str = '1980-01-01'
 end_date_str = None
 
 assets = ['MSCI EM', 'CHINA', 'JAPAN', 'EUROSTOXX', 'USA','NASDAQ', 'BRENT CRUDE', 'GOLD', 'COPPER', 'BUND',
