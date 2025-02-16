@@ -8,50 +8,21 @@ from functools import reduce
 
 
 def compute_d1(s, k, r, t, v):
-    """
-    Vectorised implementation of the Black-Scholes model.
-
-    Parameters
-    ----------
-    s : array-like
-        underlying price.
-    k : array-like
-        strike price.
-    r : array-like
-        risk-free interest rate.
-    t : array-like
-        time to expiration.
-    v : array-like
-        volatility.
-
-    Returns
-    -------
-    array-like
-        d1.
-
-    """
+    """Vectorised implementation of the Black-Scholes model."""
     return (np.log(s / k) + np.outer(t, (r + v**2 / 2))) / (np.outer(np.sqrt(t), v))
 
 
 def compute_deltas(d1):
-    """
-    Compute call and put deltas.
-
-    Parameters
-    ----------
-    d1 : array-like
-        DESCRIPTION.
-
-    Returns
-    -------
-    tuple
-        call and put deltas.
-
-    """
+    """Compute call and put deltas."""
     return st.norm.cdf(d1), -st.norm.cdf(-d1)
 
 
 def compute_avg_straddle_delta_window(df, risk_free_rates, assets):
+    """
+    Lookback straddle calculated by aggregating the call and put deltas from
+    the highest up-strike and the lowest down-strike using the Black-Scholes
+    model.
+    """
     s = df.iloc[-1]
     r = risk_free_rates[df.index[-1]] / 100
     v = df.pct_change().std() * np.sqrt(252)
@@ -67,6 +38,7 @@ def compute_avg_straddle_delta_window(df, risk_free_rates, assets):
 
 
 def compute_avg_straddle_delta(prices, lookback, risk_free_rates, assets, start_date):
+    """Momentum signal using lookback straddles."""
     return pd.concat([compute_avg_straddle_delta_window(prices.iloc[i:i+lookback], risk_free_rates, assets)
                       for i in range(len(prices) - lookback + 1)
                       if prices.index[i + lookback - 1] >= start_date],
@@ -78,26 +50,16 @@ def compute_discrete_straddle(signals, buffer):
 
 
 def elementwise_max(df1, df2):
-    """
-    Compute the elementwise max between two dataframes.
-
-    Parameters
-    ----------
-    df1 : pd.DataFrame
-        first dataframe.
-    df2 : pd.DataFrame
-        second dataframe.
-
-    Returns
-    -------
-    pd.DataFrame
-        elementwise max.
-
-    """
+    """Compute the elementwise max between two dataframes."""
     return pd.DataFrame(np.where(df1 >= df2, df1, df2), df1.index, df1.columns)
 
 
 def compute_atr(prices, lookback):
+    """
+    Average true range over a lookback period. Provides a more complete risk
+    measure than volatility by comparing the max and min of a given day 
+    versus the previous day's close.
+    """
     prev_close = prices['PX_LAST'].shift(1).fillna(0)
 
     return reduce(elementwise_max, [prices['PX_HIGH'] - prices['PX_LOW'],
@@ -115,6 +77,10 @@ def apply_multipliers(signals, fx_prices, df_config):
 
 
 def moving_high_and_low(signals, signals_disc, prices, window1, window2, breakout):
+    """
+    Composite signal using a slower lookback straddle signal (200 day window)
+    and a faster breakout signal (50 day window).
+    """
     df1_high = prices.rolling(window1).max()
     df1_low = prices.rolling(window1).min()
     df2_high = prices.rolling(window2).max()
@@ -147,6 +113,10 @@ def compute_bps_weights(prices, futures, fx_prices, df_config, scheme_value):
 
 
 def compute_unadj_weights(comp_signals, prices, fx_prices, df_config, atr, risk_target, scheme_value):
+    """
+    Similar to an inverse volatility (vol scaling) approach to size positions,
+    an inverse ATR scaling is done to calculate "equal risk" weightings.
+    """
     fut_unadj = np.floor((1 / atr) * risk_target * comp_signals)
     return compute_bps_weights(prices.reindex(fut_unadj.index), fut_unadj, fx_prices, df_config, scheme_value)
 
@@ -156,29 +126,24 @@ def compute_unadj_weights(comp_signals, prices, fx_prices, df_config, atr, risk_
 
 
 def compute_returns(returns, weights, comms=0):
+    """
+    Compute the weighted returns for each individual security as well as the
+    portfolio returns across all securities.
+    """
     weights1 = weights.shift(1).fillna(0)
     delta = weights - weights1
     cost = delta.abs() * comms
-    asset_returns = returns * weights1 - cost
-    total_returns = asset_returns.sum(axis=1)
+    weighted_returns = returns * weights1 - cost
+    total_returns = weighted_returns.sum(axis=1)
 
-    return asset_returns, total_returns
+    return weighted_returns, total_returns
 
 
 def compute_drawdown(returns):
     """
-    Compute the drawdown statistics of a return series.
-
-    Parameters
-    ----------
-    returns : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    dict
-        drawdown series, maximum drawdown, maximum drawdown duration.
-
+    Compute the drawdown statistics of a return series. This includes drawdown
+    and drawdown duration series as well as maximum drawdown and maximum
+    drawdown duration.
     """
     df = returns.rename('Ret').to_frame()
     df['Cum Ret'] = np.cumprod(1 + df['Ret'])
@@ -192,24 +157,8 @@ def compute_drawdown(returns):
 
 def performace(returns, weights, comms=0):
     """
-    Analyse the performace of a strategy at a portfolio level.
-
-    Parameters
-    ----------
-    returns : array-like
-        DESCRIPTION.
-    weights : array-like
-        DESCRIPTION.
-    comms : TYPE, optional
-        DESCRIPTION. The default is 0.
-
-    Returns
-    -------
-    asset_returns : array-like
-        DESCRIPTION.
-    stats : dict
-        mean, std, skew, kurtosis, sharpe and drawdown of portfolio.
-
+    Analyse the performace of a strategy at a portfolio level by looking at
+    statistics such as mean, standard deviation and Sharpe ratio.
     """
     asset_returns, total_returns = compute_returns(returns, weights, comms)
 
