@@ -1,10 +1,12 @@
 import datetime as dt
 import pandas as pd
+from data_connect.bbg_session import BloombergSession
 
 import signal_functions as sigfn
 
 
 def get_bbg_data(bbg, securities, fields, start_date, end_date, assets):
+    """Get historical data using Bloomberg API."""
     df = bbg.get_historical(securities, fields, start_date, end_date, index_type=dt.date).droplevel('Field', axis=1)
     return df[securities.str.replace(':', '').str.replace('?', '')].set_axis(assets, axis=1)
 
@@ -20,13 +22,13 @@ bbg_data_file = 'bbg_data.xlsx'
 start_date_str = '2015-01-01'
 end_date_str = None
 
-assets = ['MSCI EM', 'CHINA', 'JAPAN', 'EUROSTOXX', 'USA','USA2','NASDAQ', 'BRENT CRUDE', 'GOLD', 'COPPER', 'BUND',
+assets = ['MSCI EM', 'CHINA', 'JAPAN', 'EUROSTOXX', 'USA','NASDAQ', 'BRENT CRUDE', 'GOLD', 'COPPER', 'BUND',
           'US 10YR', 'US LONG', 'GILT']
 
 straddle_lookback = 252
 straddle_buffer = 0.15
 
-atr_looback = 252
+atr_looback = 60
 
 comp_signal_fn = sigfn.moving_high_and_low
 comp_signal_kwargs1 = {'window1': 100, 'window2': 50, 'breakout': True}
@@ -48,40 +50,22 @@ df_config['START_DATE'].fillna(start_date, inplace=True)
 _cols = ['FUT Multiplier', 'FX Multiplier', 'Comms']
 df_config[_cols] = df_config[_cols].astype(float)
 
-try:
-    from data_connect.bbg_session import BloombergSession
+bbg = BloombergSession()
 
-    bbg = BloombergSession()
+risk_free_rates = bbg.get_historical('US0003M Index', 'PX_LAST', start_date, end_date, index_type=dt.date).squeeze()
 
-    risk_free_rates = bbg.get_historical('US0003M Index', 'PX_LAST', start_date, end_date, index_type=dt.date).squeeze()
+fx_prices = get_bbg_data(bbg, df_config['FX CODE'], 'PX_LAST', start_date, end_date, assets)
 
-    fx_prices = get_bbg_data(bbg, df_config['FX CODE'], 'PX_LAST', start_date, end_date, assets)
+print('Reading in daily prices from Bloomberg')
+daily_prices = {field: get_bbg_data(bbg, df_config['RISK_TICKER'], field, bbg_start_date, end_date, assets)
+                for field in ['PX_LAST', 'PX_HIGH', 'PX_LOW']}
 
-    print('Reading in daily prices from Bloomberg')
-    daily_prices = {field: get_bbg_data(bbg, df_config['RISK_TICKER'], field, bbg_start_date, end_date, assets)
-                    for field in ['PX_LAST', 'PX_HIGH', 'PX_LOW']}
-except ModuleNotFoundError:
-    print('Cannot connect to Bloomberg')
+_dates = pd.date_range(start_date, end_date, freq='D')
+dates = _dates[_dates.weekday < 5]
+dates_monthly = dates.to_frame().resample('BM').last().index.date
+dates = dates.date
 
-    risk_free_rates = pd.read_excel('bbg_data.xlsx', 'US0003M Index', index_col=0).squeeze()
-
-    fx_prices = pd.read_excel('bbg_data.xlsx', 'FX_CODE', index_col=0)
-
-    print('Reading in daily prices from Excel files')
-    daily_prices = pd.read_excel('bbg_data.xlsx', ['PX_LAST', 'PX_HIGH', 'PX_LOW'], index_col=0)
-
-    for _df in [risk_free_rates, fx_prices, *daily_prices.values()]:
-        _df.index = _df.index.date
-
-    start_date = risk_free_rates.index[0]
-    end_date = risk_free_rates.index[-1]
-finally:
-    _dates = pd.date_range(start_date, end_date, freq='D')
-    dates = _dates[_dates.weekday < 5]
-    dates_monthly = dates.to_frame().resample('BM').last().index.date
-    dates = dates.date
-
-    prices = daily_prices['PX_LAST']
+prices = daily_prices['PX_LAST']
 
 """========================================================================="""
 """Compute signals"""
@@ -98,12 +82,12 @@ comp_signals = comp_signal_fn(straddle_signals, straddle_signals_discrete, **com
                               **{k: globals()[v] for k, v in comp_signal_kwargs2.items()})
 
 print('Computing weights')
-weights = weights_fn(comp_signals, **weights_kwargs1, **{k: globals()[v] for k, v in weights_kwargs2.items()})
+weights = weights_fn(comp_signals, **weights_kwargs1, **{k: globals()[v] for k, v in weights_kwargs2.items()}).clip(0)
 
 """========================================================================="""
 """Backtesting"""
 
 daily_returns = prices.pct_change().reindex(dates)
-asset_returns, portfolio_stats = sigfn.performace(daily_returns, weights)
+total_returns, weighted_returns, portfolio_stats = sigfn.performance(daily_returns, weights)
 
 """========================================================================="""
