@@ -160,14 +160,14 @@ def performace(returns, weights, comms=0):
     Analyse the performace of a strategy at a portfolio level by looking at
     statistics such as mean, standard deviation and Sharpe ratio.
     """
-    asset_returns, total_returns = compute_returns(returns, weights, comms)
+    weighted_returns, total_returns = compute_returns(returns, weights, comms)
 
     stats = {'mean': total_returns.mean() * 252, 'std': total_returns.std() * np.sqrt(252),
              'skew': st.skew(total_returns), 'kurtosis': st.skew(total_returns)}
     stats['sharpe'] = stats['mean'] / stats['std']
     stats.update(compute_drawdown(total_returns))
 
-    return asset_returns, stats
+    return weighted_returns, stats
 
 
 """========================================================================="""
